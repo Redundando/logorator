@@ -1,16 +1,15 @@
 from functools import cached_property, wraps
 from time import perf_counter
-import threading
 import re
 import os
 
 
 class Logger:
-    _thread_data = threading.local()
+    log_level = 0
     SILENT = False
     OUTPUT_FILE = None
 
-    def __init__(self, silent: bool = None, mode: str = "normal"):
+    def __init__(self, silent: bool = None, mode: str = "normal", override_function_name:str=None):
         """
         Initialize the Logger instance.
 
@@ -35,19 +34,7 @@ class Logger:
             raise ValueError("`mode` must be either 'normal' or 'short'.")
         self.mode = mode
 
-    @property
-    def log_level(self) -> int:
-        if not hasattr(Logger._thread_data, 'LOG_LEVEL'):
-            Logger._thread_data.log_level = 0
-        return Logger._thread_data.log_level
-
-    @log_level.setter
-    def log_level(self, value):
-        if not isinstance(value, int):
-            raise TypeError("`log_level` must be set to an integer.")
-        if value < 0:
-            raise ValueError("`log_level` must be a non-negative integer.")
-        Logger._thread_data.log_level = value
+        self.override_function_name = override_function_name
 
     @cached_property
     def eol(self):
@@ -85,11 +72,11 @@ class Logger:
 
         @wraps(func)
         def wrapper(*args, **kwargs):
-            self.log_level += 1
+            self.log_level = self.log_level + 1
             tabs = "  " * (self.log_level - 1)
             start = perf_counter()
             if not self.silent:
-                Logger.log(message=f"{tabs}Running \033[32m{func.__name__} \033[0m ", end=self.eol)
+                Logger.log(message=f"{tabs}Running \033[32m{self.override_function_name or func.__name__} \033[0m ", end=self.eol)
                 for arg in args:
                     Logger.log(message=f"{tabs}  \33[33m{str(arg)[:1000]}\033[0m", end=self.eol)
                 for key in list(kwargs):
@@ -100,9 +87,9 @@ class Logger:
             duration = '{:,.2f}'.format((end - start) * 1000)
             if not self.silent:
                 Logger.log(
-                    message=f"{tabs}Finished \033[32m{func.__name__} \033[0m Time elapsed: \033[32m{duration} ms\033[0m",
+                    message=f"{tabs}Finished \033[32m{self.override_function_name or func.__name__} \033[0m Time elapsed: \033[32m{duration} ms\033[0m",
                     end=self.eol)
-            self.log_level -= 1
+            self.log_level = self.log_level - 1
             return result
 
         return wrapper
