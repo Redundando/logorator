@@ -5,11 +5,13 @@ import os
 
 
 class Logger:
-    log_level = 0
+    LOG_LEVEL = 0
+    LAST_LOG_LEVEL = 0
+    LAST_LOG_MODE = "normal"
     SILENT = False
     OUTPUT_FILE = None
 
-    def __init__(self, silent: bool = None, mode: str = "normal", override_function_name:str=None):
+    def __init__(self, silent: bool = None, mode: str = "normal", override_function_name: str = None):
         """
         Initialize the Logger instance.
 
@@ -36,11 +38,17 @@ class Logger:
 
         self.override_function_name = override_function_name
 
-    @cached_property
     def eol(self):
         if self.mode == "short":
             return "\t"
         return "\n"
+
+    def ensure_newline(self):
+        """Ensures a newline is printed if the nesting level increases."""
+        if self.mode == "short" and Logger.LAST_LOG_MODE == "short" and Logger.LAST_LOG_LEVEL < Logger.LOG_LEVEL:
+            Logger.log("", end="\n")
+        Logger.LAST_LOG_LEVEL = Logger.LOG_LEVEL
+        Logger.LAST_LOG_MODE = self.mode
 
     @staticmethod
     def log(message: str = "", end: str = ""):
@@ -72,15 +80,17 @@ class Logger:
 
         @wraps(func)
         def wrapper(*args, **kwargs):
-            self.log_level = self.log_level + 1
-            tabs = "  " * (self.log_level - 1)
+            Logger.LOG_LEVEL = Logger.LOG_LEVEL + 1
+            tabs = "  " * (Logger.LOG_LEVEL - 1)
+            self.ensure_newline()
             start = perf_counter()
             if not self.silent:
-                Logger.log(message=f"{tabs}Running \033[32m{self.override_function_name or func.__name__} \033[0m ", end=self.eol)
+                Logger.log(message=f"{tabs}Running \033[32m{self.override_function_name or func.__name__} \033[0m ",
+                           end=self.eol())
                 for arg in args:
-                    Logger.log(message=f"{tabs}  \33[33m{str(arg)[:1000]}\033[0m", end=self.eol)
+                    Logger.log(message=f"{tabs}  \33[33m{str(arg)[:1000]}\033[0m", end=self.eol())
                 for key in list(kwargs):
-                    Logger.log(message=f"{tabs}  {key}: \33[33m{str(kwargs[key])[:1000]}\033[0m", end=self.eol)
+                    Logger.log(message=f"{tabs}  {key}: \33[33m{str(kwargs[key])[:1000]}\033[0m", end=self.eol())
 
             result = func(*args, **kwargs)
             end = perf_counter()
@@ -88,8 +98,8 @@ class Logger:
             if not self.silent:
                 Logger.log(
                     message=f"{tabs}Finished \033[32m{self.override_function_name or func.__name__} \033[0m Time elapsed: \033[32m{duration} ms\033[0m",
-                    end=self.eol)
-            self.log_level = self.log_level - 1
+                    end="\n")
+            Logger.LOG_LEVEL = Logger.LOG_LEVEL - 1
             return result
 
         return wrapper
