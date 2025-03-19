@@ -1,33 +1,15 @@
-from functools import cached_property, wraps
+from functools import wraps
 from time import perf_counter
 import re
 import os
+import inspect
 
 
 class Logger:
-    LOG_LEVEL = 0
-    LAST_LOG_LEVEL = 0
-    LAST_LOG_MODE = "normal"
     SILENT = False
     OUTPUT_FILE = None
 
     def __init__(self, silent: bool = None, mode: str = "normal", override_function_name: str = None):
-        """
-        Initialize the Logger instance.
-
-        Parameters:
-            silent (bool, optional): If True, suppresses logging output. Defaults to None,
-                                     which uses the global `Logger.SILENT` value.
-            mode (str, optional): Determines the logging format.
-                                  Options are 'normal' (default) or 'short' (tab-separated).
-
-        Raises:
-            TypeError: If `silent` is not a boolean or None.
-            ValueError: If `mode` is not one of the supported options ('normal', 'short').
-
-        Example:
-            logorator = Logger(silent=False, mode="short")
-        """
         if silent is not None and not isinstance(silent, bool):
             raise TypeError("`silent` must be a boolean or None.")
         self.silent = Logger.SILENT if silent is None else silent
@@ -43,13 +25,6 @@ class Logger:
             return "\t"
         return "\n"
 
-    def ensure_newline(self):
-        """Ensures a newline is printed if the nesting level increases."""
-        if self.mode == "short" and Logger.LAST_LOG_MODE == "short" and Logger.LAST_LOG_LEVEL < Logger.LOG_LEVEL:
-            Logger.log("", end="\n")
-        Logger.LAST_LOG_LEVEL = Logger.LOG_LEVEL
-        Logger.LAST_LOG_MODE = self.mode
-
     @staticmethod
     def log(message: str = "", end: str = ""):
         if not isinstance(message, str):
@@ -62,69 +37,72 @@ class Logger:
                 print(message, end=end)
             else:
                 with open(Logger.OUTPUT_FILE, "a+") as f:
-                    sanitized_message = re.sub(r'\033\[[0-9;]*m', "", message)  # Remove ANSI escape codes
+                    sanitized_message = re.sub(r'\033\[[0-9;]*m', "", message)
                     f.write(sanitized_message + end)
         except IOError as e:
             raise IOError(f"Failed to write to the log file: {Logger.OUTPUT_FILE}. Error: {e}")
 
+    def _log_start(self, func_name: str, args: tuple, kwargs: dict, _logorator_async_func=False) -> None:
+        if self.silent:
+            return
+        async_string = "\033[35masync \033[0m" if _logorator_async_func else ""
+        Logger.log(message=f"Running {async_string}\033[32m{func_name} \033[0m ", end=self.eol())
+        for arg in args:
+            Logger.log(message=f"  \33[33m{str(arg)[:1000]}\033[0m", end=self.eol())
+        for key in list(kwargs):
+            Logger.log(message=f"  {key}: \33[33m{str(kwargs[key])[:1000]}\033[0m", end=self.eol())
+
+    def _log_end(self, func_name: str, duration: str, first_arg=None, _logorator_async_func=False) -> None:
+        if self.silent:
+            return
+        async_string = "\033[35masync \033[0m" if _logorator_async_func else ""
+        arg_str = f" \33[33m({str(first_arg)[:100]})\33[0m" if first_arg is not None else ""
+        Logger.log(message=f"Finished {async_string}\033[32m{func_name}{arg_str} \033[0m Time elapsed: \033[32m{duration} ms\033[0m", end="\n")
+
     def __call__(self, func):
-        """
-            Decorator to log the execution of a function, including its arguments and execution time.
+        func_name = self.override_function_name or func.__name__
 
-            Parameters:
-                func (callable): The function to decorate.
+        if inspect.iscoroutinefunction(func):
+            @wraps(func)
+            async def async_wrapper(*args, **kwargs):
+                start = perf_counter()
+                self._log_start(func_name, args, kwargs, _logorator_async_func=True)
 
-            Returns:
-                callable: The wrapped function with logging applied.
-            """
+                result = await func(*args, **kwargs)
 
-        @wraps(func)
-        def wrapper(*args, **kwargs):
-            Logger.LOG_LEVEL = Logger.LOG_LEVEL + 1
-            tabs = "  " * (Logger.LOG_LEVEL - 1)
-            self.ensure_newline()
-            start = perf_counter()
-            if not self.silent:
-                Logger.log(message=f"{tabs}Running \033[32m{self.override_function_name or func.__name__} \033[0m ",
-                           end=self.eol())
-                for arg in args:
-                    Logger.log(message=f"{tabs}  \33[33m{str(arg)[:1000]}\033[0m", end=self.eol())
-                for key in list(kwargs):
-                    Logger.log(message=f"{tabs}  {key}: \33[33m{str(kwargs[key])[:1000]}\033[0m", end=self.eol())
+                end = perf_counter()
+                duration = '{:,.2f}'.format((end - start) * 1000)
+                first_arg = args[0] if args else None
+                self._log_end(func_name, duration, first_arg, _logorator_async_func=True)
 
-            result = func(*args, **kwargs)
-            end = perf_counter()
-            duration = '{:,.2f}'.format((end - start) * 1000)
-            if not self.silent:
-                Logger.log(
-                    message=f"{tabs}Finished \033[32m{self.override_function_name or func.__name__} \033[0m Time elapsed: \033[32m{duration} ms\033[0m",
-                    end="\n")
-            Logger.LOG_LEVEL = Logger.LOG_LEVEL - 1
-            return result
+                return result
 
-        return wrapper
+            return async_wrapper
+        else:
+            @wraps(func)
+            def wrapper(*args, **kwargs):
+                start = perf_counter()
+                self._log_start(func_name, args, kwargs)
+
+                result = func(*args, **kwargs)
+
+                end = perf_counter()
+                duration = '{:,.2f}'.format((end - start) * 1000)
+                first_arg = args[0] if args else None
+                self._log_end(func_name, duration, first_arg)
+
+                return result
+
+            return wrapper
 
     @staticmethod
     def set_silent(silent: bool = True):
-        """
-        Set the global silent mode for the Logger.
-
-        Parameters:
-            silent (bool): If True, suppresses all logging output globally. Defaults to True.
-        """
         if not isinstance(silent, bool):
             raise TypeError("`silent` must be a boolean.")
-
         Logger.SILENT = silent
 
     @staticmethod
     def set_output(filename: str | None = None):
-        """
-        Set the global output file for the Logger.
-
-        Parameters:
-            filename (str | None): The name of the file to write logs to. If None, logs are written to the console.
-        """
         if filename is not None and not isinstance(filename, str):
             raise TypeError("`filename` must be a string or None.")
 
@@ -146,16 +124,6 @@ class Logger:
 
     @staticmethod
     def note(note: str = "", mode: str = "normal"):
-        """
-        Log a custom note with the current logging level's indentation.
-
-        Parameters:
-            note (str): The custom message to log. Defaults to an empty string.
-            mode (str): The logging mode. Options are:
-                - "normal": Each note ends with a newline.
-                - "short": Each note ends with a tab character (\t).
-                Defaults to "normal".
-        """
         if not isinstance(note, str):
             raise TypeError("`note` must be a string.")
         if mode not in {"normal", "short"}:
@@ -164,7 +132,4 @@ class Logger:
         if Logger.SILENT:
             return
 
-        Logger.log(
-            f"\033[34m{note} \033[0m",
-            end=("\t" if mode == "short" else "\n")
-        )
+        Logger.log(f"\033[34m{note} \033[0m", end=("\t" if mode == "short" else "\n"))

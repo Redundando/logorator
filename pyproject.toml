@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "logorator"
-version = "1.0.6"
+version = "1.0.7"
 description = "A decorator-based logging library with hierarchical structure, ANSI color support, and configurable outputs."
 readme = "README.md"
 authors = [
